@@ -3,6 +3,9 @@
 // license that can be found in the LICENSE file.
 
 #![deny(missing_docs)]
+use std::borrow::Borrow;
+use std::ops::Deref;
+use std::ops::Index;
 use {
     crate::{error::*, formatter::*, options::*, parser::*},
     std::cell::{Ref, RefCell, RefMut},
@@ -381,6 +384,41 @@ impl Value {
         let comments = self.comments();
         comments.before_value().len() > 0 || comments.end_of_line().is_some()
     }
+
+    /// Source lifted from:
+    /// https://docs.rs/serde_json/latest/src/serde_json/value/mod.rs.html#778-794
+    pub fn pointer(&self, pointer: &str) -> Option<Ref<'_, Self>> {
+        if pointer.is_empty() {
+            return None;
+        }
+
+        if !pointer.starts_with('/') {
+            return None;
+        }
+
+        let myself = Rc::new(RefCell::new(self));
+        let initial_value: Ref<'_, Value> = myself.deref().borrow();
+
+        pointer.split('/').skip(1).map(|x| x.replace("~1", "/").replace("~0", "~")).try_fold(
+            Some(initial_value),
+            |target, token| match target.as_deref() {
+                Some(Self::Object { ref val, .. }) => {
+                    val.properties().find(|p| p.name() == token).map(|p| p.value())
+                }
+                Some(Self::Array { ref val, .. }) => {
+                    parse_index(&token).and_then(|idx| val.items().nth(idx))
+                }
+                _ => None,
+            },
+        )
+    }
+}
+
+fn parse_index(s: &str) -> Option<usize> {
+    if s.starts_with('+') || (s.starts_with('0') && s.len() != 1) {
+        return None;
+    }
+    s.parse().ok()
 }
 
 impl std::fmt::Debug for Value {
